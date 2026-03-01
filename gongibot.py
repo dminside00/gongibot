@@ -22,16 +22,18 @@ def save_seen(seen: set):
 
 
 def fetch_articles() -> list:
-    url = "https://apis.naver.com/cafe-web/cafe2/ArticleListV2.json"
+    url = "https://apis.naver.com/cafe-web/cafe2/ArticleListV2dot1.json"
     params = {
-        "cafeId":   CAFE_ID,
-        "menuId":   MENU_ID,
-        "pageSize": 20,
-        "page":     1,
+        "search.clubid":    CAFE_ID,
+        "search.menuid":    MENU_ID,
+        "search.boardtype": "L",
+        "search.page":      1,
+        "search.perPage":   20,
+        "ad":               "false",
     }
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
-        "Referer": "https://cafe.naver.com/",
+        "Referer": f"https://cafe.naver.com/f-e/cafes/{CAFE_ID}/menus/{MENU_ID}",
     }
     resp = requests.get(url, params=params, headers=headers, timeout=15)
     print("상태코드:", resp.status_code)
@@ -87,4 +89,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
