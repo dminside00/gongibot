@@ -6,6 +6,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+TELEGRAM_TOKEN  = os.environ["TELEGRAM_TOKEN"]
+TELEGRAM_CHAT   = os.environ["TELEGRAM_CHAT"]
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -215,5 +217,6 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
 
 
