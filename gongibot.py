@@ -1,158 +1,219 @@
 #!/usr/bin/env python3
-"""네이버 카페 새 글 알림 텔레그램 봇.
-
-- 1시간 간격으로 특정 카페 메뉴의 게시글 목록을 조회합니다.
-- 마지막으로 확인한 게시글 ID보다 큰 글이 있으면 텔레그램으로 알림을 전송합니다.
-"""
+"""네이버 카페 게시판 새 글을 텔레그램으로 알림 전송하는 봇."""
 
 from __future__ import annotations
 
-import html
 import json
+import logging
 import os
 import time
 from dataclasses import dataclass
-from typing import List
-from urllib.error import HTTPError, URLError
+from pathlib import Path
+from typing import Any
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-# 요청하신 값(필요하면 환경변수로 덮어쓰기 가능)
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8537012484:AAGwlM_Xh-PaLJJ1Bn2ax6fG3x6TlRvEZCc")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "5983760560")
-CAFE_ID = int(os.getenv("NAVER_CAFE_ID", "21160703"))
-MENU_ID = int(os.getenv("NAVER_MENU_ID", "2510"))
-POLL_INTERVAL_SECONDS = int(os.getenv("POLL_INTERVAL_SECONDS", "3600"))
-STATE_FILE = os.getenv("STATE_FILE", "last_seen_article_id.txt")
 
-
-@dataclass
-class Article:
+@dataclass(frozen=True)
+class CafeArticle:
     article_id: int
-    subject: str
-
-    @property
-    def url(self) -> str:
-        return f"https://cafe.naver.com/ca-fe/cafes/{CAFE_ID}/articles/{self.article_id}"
+    title: str
+    url: str
 
 
-def fetch_article_list() -> List[Article]:
-    """네이버 카페 게시글 목록 JSON을 조회해 최신순으로 반환합니다."""
-    api_url = (
-        "https://apis.naver.com/cafe-web/cafe2/ArticleListV2dot1.json"
-        f"?search.clubid={CAFE_ID}"
-        f"&search.menuid={MENU_ID}"
-        "&search.page=1"
-        "&search.perPage=50"
-        "&search.sortBy=date"
-        "&search.orderBy=desc"
+class ConfigError(Exception):
+    """환경 변수 누락/형식 오류."""
+
+
+class NaverCafeTelegramBot:
+    def __init__(self) -> None:
+        self.club_id = self._read_int_env("NAVER_CAFE_CLUB_ID")
+        self.menu_id = self._read_int_env("NAVER_CAFE_MENU_ID")
+        self.telegram_token = self._read_env("TELEGRAM_BOT_TOKEN")
+        self.telegram_chat_id = self._read_env("TELEGRAM_CHAT_ID")
+        self.poll_interval_seconds = self._read_int_env("POLL_INTERVAL_SECONDS", default=60)
+        self.state_file = Path(os.getenv("STATE_FILE", "state.json"))
+
+        self.user_agent = (
+            "Mozilla/5.0 (X11; Linux x86_64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/122.0.0.0 Safari/537.36"
+        )
+        self.referer = f"https://m.cafe.naver.com/ca-fe/web/cafes/{self.club_id}/menus/{self.menu_id}"
+
+        self.last_article_id = self._load_last_article_id()
+
+    @staticmethod
+    def _read_env(name: str) -> str:
+        value = os.getenv(name)
+        if not value:
+            raise ConfigError(f"환경 변수 {name} 가 필요합니다.")
+        return value
+
+    @staticmethod
+    def _read_int_env(name: str, default: int | None = None) -> int:
+        raw = os.getenv(name)
+        if raw is None:
+            if default is None:
+                raise ConfigError(f"환경 변수 {name} 가 필요합니다.")
+            return default
+        try:
+            return int(raw)
+        except ValueError as exc:
+            raise ConfigError(f"환경 변수 {name} 는 정수여야 합니다. (현재: {raw})") from exc
+
+    def _load_last_article_id(self) -> int | None:
+        if not self.state_file.exists():
+            return None
+        try:
+            data = json.loads(self.state_file.read_text(encoding="utf-8"))
+            article_id = data.get("last_article_id")
+            if isinstance(article_id, int):
+                return article_id
+        except json.JSONDecodeError:
+            logging.warning("상태 파일이 손상되어 초기화합니다: %s", self.state_file)
+        return None
+
+    def _save_last_article_id(self, article_id: int) -> None:
+        payload = {"last_article_id": article_id}
+        self.state_file.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _http_get_text(self, base_url: str, params: dict[str, Any], timeout: int = 10) -> str:
+        query = urlencode(params)
+        request = Request(
+            url=f"{base_url}?{query}",
+            headers={"User-Agent": self.user_agent, "Referer": self.referer},
+            method="GET",
+        )
+        with urlopen(request, timeout=timeout) as response:
+            return response.read().decode("utf-8")
+
+    def _http_post_form_json(self, url: str, form: dict[str, str], timeout: int = 10) -> dict[str, Any]:
+        body = urlencode(form).encode("utf-8")
+        request = Request(
+            url=url,
+            data=body,
+            headers={"User-Agent": self.user_agent, "Content-Type": "application/x-www-form-urlencoded"},
+            method="POST",
+        )
+        with urlopen(request, timeout=timeout) as response:
+            text = response.read().decode("utf-8")
+            return json.loads(text)
+
+    def fetch_latest_articles(self, per_page: int = 20) -> list[CafeArticle]:
+        url = "https://apis.naver.com/cafe-web/cafe2/ArticleListV2dot1.json"
+        params = {
+            "search.clubid": self.club_id,
+            "search.menuid": self.menu_id,
+            "search.boardtype": "L",
+            "search.page": 1,
+            "search.perPage": per_page,
+            "ad": "false",
+            "uuid": "",
+        }
+
+        raw = self._http_get_text(url, params)
+        payload = self._parse_json_or_jsonp(raw)
+        message = payload.get("message", {})
+        article_list = message.get("result", {}).get("articleList", [])
+
+        articles: list[CafeArticle] = []
+        for item in article_list:
+            article_id = item.get("articleid")
+            title = item.get("subject")
+            if not isinstance(article_id, int) or not isinstance(title, str):
+                continue
+            article_url = (
+                f"https://cafe.naver.com/ArticleRead.nhn?clubid={self.club_id}&articleid={article_id}"
+            )
+            articles.append(CafeArticle(article_id=article_id, title=title.strip(), url=article_url))
+
+        return articles
+
+    @staticmethod
+    def _parse_json_or_jsonp(raw: str) -> dict[str, Any]:
+        raw = raw.strip()
+        if raw.startswith("{"):
+            return json.loads(raw)
+
+        start = raw.find("(")
+        end = raw.rfind(")")
+        if start == -1 or end == -1 or end <= start:
+            raise ValueError("JSON/JSONP 응답 파싱 실패")
+
+        return json.loads(raw[start + 1 : end])
+
+    def send_telegram(self, article: CafeArticle) -> None:
+        endpoint = f"https://api.telegram.org/bot{self.telegram_token}/sendMessage"
+        message = f"🆕 새 글\n- 제목: {article.title}\n- 링크: {article.url}"
+        data = self._http_post_form_json(
+            endpoint,
+            {
+                "chat_id": self.telegram_chat_id,
+                "text": message,
+                "disable_web_page_preview": "true",
+            },
+        )
+        if not data.get("ok"):
+            raise RuntimeError(f"텔레그램 전송 실패: {data}")
+
+    def run_once(self) -> None:
+        articles = self.fetch_latest_articles()
+        if not articles:
+            logging.info("글 목록이 비어 있습니다.")
+            return
+
+        latest_id = max(article.article_id for article in articles)
+
+        if self.last_article_id is None:
+            self.last_article_id = latest_id
+            self._save_last_article_id(latest_id)
+            logging.info("초기 실행: 가장 최신 글 ID(%s)를 기준점으로 저장했습니다.", latest_id)
+            return
+
+        new_articles = [a for a in articles if a.article_id > self.last_article_id]
+        if not new_articles:
+            logging.info("새 글이 없습니다. (last=%s)", self.last_article_id)
+            return
+
+        new_articles.sort(key=lambda x: x.article_id)
+        for article in new_articles:
+            self.send_telegram(article)
+            logging.info("전송 완료: %s (%s)", article.title, article.article_id)
+
+        self.last_article_id = max(article.article_id for article in new_articles)
+        self._save_last_article_id(self.last_article_id)
+
+    def run_forever(self) -> None:
+        logging.info(
+            "감시 시작: club_id=%s menu_id=%s interval=%ss",
+            self.club_id,
+            self.menu_id,
+            self.poll_interval_seconds,
+        )
+        while True:
+            try:
+                self.run_once()
+            except Exception:
+                logging.exception("처리 중 오류 발생")
+            time.sleep(self.poll_interval_seconds)
+
+
+def main() -> None:
+    logging.basicConfig(
+        level=os.getenv("LOG_LEVEL", "INFO"),
+        format="%(asctime)s [%(levelname)s] %(message)s",
     )
 
-    headers = {
-        "User-Agent": "Mozilla/5.0",
-        "Referer": f"https://cafe.naver.com/f-e/cafes/{CAFE_ID}/menus/{MENU_ID}?viewType=L",
-        "Accept": "application/json, text/plain, */*",
-    }
-
-    req = Request(api_url, headers=headers)
-    with urlopen(req, timeout=20) as response:
-        payload = json.loads(response.read().decode("utf-8"))
-
-    article_list = payload.get("message", {}).get("result", {}).get("articleList", [])
-
-    parsed: List[Article] = []
-    for item in article_list:
-        article_id = item.get("articleId")
-        subject = item.get("subject")
-        if article_id is None or subject is None:
-            continue
-        parsed.append(Article(article_id=int(article_id), subject=str(subject).strip()))
-
-    return parsed
-
-
-def send_telegram_message(text: str) -> None:
-    """텔레그램으로 HTML 형식 메시지를 보냅니다."""
-    endpoint = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    data = urlencode(
-        {
-            "chat_id": TELEGRAM_CHAT_ID,
-            "text": text,
-            "parse_mode": "HTML",
-            "disable_web_page_preview": "true",
-        }
-    ).encode("utf-8")
-
-    req = Request(endpoint, data=data, method="POST")
-    with urlopen(req, timeout=20) as response:
-        body = json.loads(response.read().decode("utf-8"))
-
-    if not body.get("ok"):
-        raise RuntimeError(f"텔레그램 전송 실패: {body}")
-
-
-def load_last_seen_article_id() -> int | None:
-    if not os.path.exists(STATE_FILE):
-        return None
     try:
-        with open(STATE_FILE, "r", encoding="utf-8") as f:
-            return int(f.read().strip())
-    except (OSError, ValueError):
-        return None
+        bot = NaverCafeTelegramBot()
+    except ConfigError as exc:
+        raise SystemExit(str(exc)) from exc
 
-
-def save_last_seen_article_id(article_id: int) -> None:
-    with open(STATE_FILE, "w", encoding="utf-8") as f:
-        f.write(str(article_id))
-
-
-def build_notice_message(article: Article) -> str:
-    safe_title = html.escape(article.subject)
-    safe_url = html.escape(article.url, quote=True)
-    return f"[공고 알림]\n★{safe_title}\n<a href=\"{safe_url}\">링크</a>"
-
-
-def run() -> None:
-    print("네이버 카페 알림 봇 시작")
-    print(f"- cafe_id={CAFE_ID}, menu_id={MENU_ID}")
-    print(f"- poll_interval={POLL_INTERVAL_SECONDS}s")
-
-    last_seen = load_last_seen_article_id()
-
-    while True:
-        try:
-            articles = fetch_article_list()
-            if not articles:
-                print("게시글 목록이 비어 있습니다.")
-            else:
-                latest_id = max(a.article_id for a in articles)
-
-                if last_seen is None:
-                    last_seen = latest_id
-                    save_last_seen_article_id(last_seen)
-                    print(f"초기화 완료. 마지막 게시글 ID={last_seen}")
-                else:
-                    new_articles = [a for a in articles if a.article_id > last_seen]
-
-                    if new_articles:
-                        # 오래된 것부터 순서대로 전송
-                        new_articles.sort(key=lambda x: x.article_id)
-                        for article in new_articles:
-                            send_telegram_message(build_notice_message(article))
-                            print(f"전송 완료: {article.article_id} / {article.subject}")
-
-                        last_seen = max(a.article_id for a in new_articles)
-                        save_last_seen_article_id(last_seen)
-                    else:
-                        print("새 글 없음")
-
-        except (HTTPError, URLError, TimeoutError, json.JSONDecodeError, RuntimeError) as e:
-            print(f"오류 발생: {e}")
-        except Exception as e:  # 예기치 못한 오류 대비
-            print(f"예상치 못한 오류: {e}")
-
-        time.sleep(POLL_INTERVAL_SECONDS)
+    bot.run_forever()
 
 
 if __name__ == "__main__":
-    run()
+    main()
+
+
