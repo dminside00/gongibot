@@ -34,6 +34,8 @@ def fetch_articles() -> list:
         "Referer": "https://cafe.naver.com/",
     }
     resp = requests.get(url, params=params, headers=headers, timeout=15)
+    print("상태코드:", resp.status_code)
+    print("응답내용:", resp.text[:1000])
     resp.raise_for_status()
     return resp.json().get("message", {}).get("result", {}).get("articleList", [])
 
@@ -85,3 +87,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
