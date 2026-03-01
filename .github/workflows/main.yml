@@ -27,7 +27,7 @@ jobs:
         run: pip install requests
 
       - name: Run bot
-        run: python gonggibot.py
+        run: python gongibot.py
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT: ${{ secrets.TELEGRAM_CHAT }}
