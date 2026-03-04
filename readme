@@ -1,4 +1,4 @@
-# 네이버 카페 새 글 알리미 (다중 게시판 + 텔레그램 제어)
+# 네이버 카페 공고 알리미 (gongibot.py)
 
 ## 주요 기능
 ✅ 5개 게시판 동시 모니터링
@@ -70,7 +70,7 @@ python gongibot.py bot
 
 ## 파일 구조
 ```
-gongibot.py          # 메인 스크립트
+gongibot.py              # 메인 스크립트
 seen_posts.json          # 확인한 글 ID 저장 (자동 생성)
 boards_config.json       # 게시판 on/off 설정 (자동 생성)
 ```
@@ -80,7 +80,7 @@ boards_config.json       # 게시판 on/off 설정 (자동 생성)
 ### 옵션 1: 크론잡만 사용 (간단)
 ```bash
 # crontab -e
-*/5 * * * * cd /path/to/script && python cafe_monitor.py
+*/5 * * * * cd /path/to/script && python gongibot.py
 ```
 - 장점: 간단, 안정적
 - 단점: 실시간 제어 불가 (설정 파일 수동 수정 필요)
@@ -88,10 +88,10 @@ boards_config.json       # 게시판 on/off 설정 (자동 생성)
 ### 옵션 2: 크론잡 + 봇 모드 (추천)
 ```bash
 # 1. 봇 모드 백그라운드 실행
-nohup python cafe_monitor.py bot > bot.log 2>&1 &
+nohup python gongibot.py bot > bot.log 2>&1 &
 
 # 2. 크론잡 설정
-*/5 * * * * cd /path/to/script && python cafe_monitor.py
+*/5 * * * * cd /path/to/script && python gongibot.py
 ```
 - 장점: 텔레그램에서 실시간 제어 가능
 - 단점: 프로세스 2개 관리 필요
@@ -112,7 +112,7 @@ nohup python cafe_monitor.py bot > bot.log 2>&1 &
 - 두 번째 실행부터 새 글만 알림됩니다.
 
 ### 봇이 응답하지 않을 때
-1. 봇 프로세스 확인: `ps aux | grep cafe_monitor`
+1. 봇 프로세스 확인: `ps aux | grep gongibot`
 2. 로그 확인: `tail -f bot.log`
 3. 토큰/채팅ID 환경변수 확인
 
