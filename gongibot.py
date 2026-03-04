@@ -23,8 +23,15 @@ CONFIG_FILE = "boards_config.json"
 def load_config() -> dict:
     """게시판 설정 로드"""
     if os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+        try:
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+                if not content:  # 빈 파일
+                    return {name: board["enabled"] for name, board in BOARDS.items()}
+                return json.loads(content)
+        except (json.JSONDecodeError, Exception) as e:
+            print(f"[경고] 설정 파일 읽기 실패, 기본값 사용: {e}")
+            return {name: board["enabled"] for name, board in BOARDS.items()}
     return {name: board["enabled"] for name, board in BOARDS.items()}
 
 def save_config(config: dict):
@@ -35,8 +42,15 @@ def save_config(config: dict):
 def load_seen() -> dict:
     """각 게시판별로 본 글 ID 로드"""
     if os.path.exists(SEEN_FILE):
-        with open(SEEN_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+        try:
+            with open(SEEN_FILE, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+                if not content:  # 빈 파일
+                    return {name: [] for name in BOARDS.keys()}
+                return json.loads(content)
+        except (json.JSONDecodeError, Exception) as e:
+            print(f"[경고] seen_posts 파일 읽기 실패, 기본값 사용: {e}")
+            return {name: [] for name in BOARDS.keys()}
     return {name: [] for name in BOARDS.keys()}
 
 def save_seen(seen: dict):
