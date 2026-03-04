@@ -79,7 +79,7 @@ def main():
     for a in new_articles:
         aid = str(a["articleId"])
         title = a.get("subject", "(제목 없음)")
-        url = f"https://cafe.naver.com/cafes/{CAFE_ID}/articles/{aid}"
+        url = f"https://cafe.naver.com/ca-fe/cafes/{CAFE_ID}/articles/{aid}"
         send_telegram(title, url)
         seen.add(aid)
 
@@ -89,5 +89,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
