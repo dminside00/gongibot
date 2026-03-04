@@ -47,7 +47,20 @@ def load_seen() -> dict:
                 content = f.read().strip()
                 if not content:  # 빈 파일
                     return {name: [] for name in BOARDS.keys()}
-                return json.loads(content)
+                
+                data = json.loads(content)
+                
+                # 기존 리스트 형태인 경우 (이전 버전과의 호환성)
+                if isinstance(data, list):
+                    print("[안내] 기존 seen_posts.json을 새 형식으로 변환합니다.")
+                    # 기존 데이터는 "종합" 게시판으로 간주
+                    new_data = {name: [] for name in BOARDS.keys()}
+                    new_data["종합"] = data
+                    save_seen(new_data)
+                    return new_data
+                
+                # 딕셔너리 형태인 경우
+                return data
         except (json.JSONDecodeError, Exception) as e:
             print(f"[경고] seen_posts 파일 읽기 실패, 기본값 사용: {e}")
             return {name: [] for name in BOARDS.keys()}
