@@ -1,7 +1,9 @@
 import os
 import json
+import re
 import requests
 import time
+from urllib.parse import unquote_plus
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 TELEGRAM_CHAT  = os.environ["TELEGRAM_CHAT"]
@@ -146,7 +148,9 @@ def fetch_blog_posts(blog_id: str, category_no: int) -> list:
     try:
         resp = requests.get(url, params=params, headers=headers, timeout=15)
         resp.raise_for_status()
-        data = resp.json()
+        # 잘못된 백슬래시 이스케이프 제거 후 파싱
+        cleaned = re.sub(r'\\([^"\\/bfnrtu0-9])', r'\1', resp.text)
+        data = json.loads(cleaned)
         posts = []
         for item in data.get("postList", []):
             post_id = str(item.get("logNo", ""))
