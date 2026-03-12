@@ -13,10 +13,10 @@ CAFE_ID = 21160703
 
 BOARDS = {
     "종합":      {"menu_id": 2510, "enabled": True, "header": "🔴 종합"},
-    "중앙공기업": {"menu_id": 861,  "enabled": True, "header": "🏢 중앙공기업"},
-    "지방공기업": {"menu_id": 2486, "enabled": True, "header": "🏛 지방공기업"},
-    "인턴계약직": {"menu_id": 2488, "enabled": True, "header": "📄 인턴/계약직"},
-    "학교병원":  {"menu_id": 2487, "enabled": True, "header": "🏥 학교/병원"},
+    "중앙공기업": {"menu_id": 861,  "enabled": True, "header": "🏢 중앙"},
+    "지방공기업": {"menu_id": 2486, "enabled": True, "header": "🏛 지방"},
+    "인턴계약직": {"menu_id": 2488, "enabled": True, "header": "📄 인턴"},
+    "학교병원":  {"menu_id": 2487, "enabled": True, "header": "🏥 학병"},
 }
 
 # ── 네이버 블로그 설정 ────────────────────
@@ -337,4 +337,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
