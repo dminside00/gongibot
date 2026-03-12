@@ -12,7 +12,7 @@ TELEGRAM_CHAT  = os.environ["TELEGRAM_CHAT"]
 CAFE_ID = 21160703
 
 BOARDS = {
-    "종합":      {"menu_id": 2510, "enabled": True, "header": "🔴 종합 공고"},
+    "종합":      {"menu_id": 2510, "enabled": True, "header": "🔴 종합"},
     "중앙공기업": {"menu_id": 861,  "enabled": True, "header": "🏢 중앙공기업"},
     "지방공기업": {"menu_id": 2486, "enabled": True, "header": "🏛 지방공기업"},
     "인턴계약직": {"menu_id": 2488, "enabled": True, "header": "📄 인턴/계약직"},
@@ -25,7 +25,7 @@ BLOG_TARGETS = [
         "name":        "최신채용공고",
         "blog_id":     "ekfzhaduddj",
         "category_no": 15,
-        "header":      "📋 최신 채용공고",
+        "header":      "🟢 정리",
     },
 ]
 
@@ -337,3 +337,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
