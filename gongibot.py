@@ -146,7 +146,9 @@ def fetch_blog_posts(blog_id: str, category_no: int) -> list:
     try:
         resp = requests.get(url, params=params, headers=headers, timeout=15)
         resp.raise_for_status()
-        data = resp.json()
+        import re
+        cleaned = re.sub(r'\\(?!["\\/bfnrtu])', r'\\\\', resp.text)
+        data = json.loads(cleaned)
         posts = []
         for item in data.get("postList", []):
             post_id = str(item.get("logNo", ""))
@@ -333,3 +335,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
