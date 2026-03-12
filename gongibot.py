@@ -10,7 +10,7 @@ TELEGRAM_CHAT  = os.environ["TELEGRAM_CHAT"]
 CAFE_ID = 21160703
 
 BOARDS = {
-    "종합":      {"menu_id": 2510, "enabled": True, "header": "🔴 종합"},
+    "종합":      {"menu_id": 2510, "enabled": True, "header": "🔴 종합 공고"},
     "중앙공기업": {"menu_id": 861,  "enabled": True, "header": "🏢 중앙공기업"},
     "지방공기업": {"menu_id": 2486, "enabled": True, "header": "🏛 지방공기업"},
     "인턴계약직": {"menu_id": 2488, "enabled": True, "header": "📄 인턴/계약직"},
@@ -23,7 +23,7 @@ BLOG_TARGETS = [
         "name":        "최신채용공고",
         "blog_id":     "ekfzhaduddj",
         "category_no": 15,
-        "header":      " 🟢 정리",
+        "header":      "📋 최신 채용공고",
     },
 ]
 
@@ -146,13 +146,11 @@ def fetch_blog_posts(blog_id: str, category_no: int) -> list:
     try:
         resp = requests.get(url, params=params, headers=headers, timeout=15)
         resp.raise_for_status()
-        import re
-        cleaned = re.sub(r'\\(?!["\\/bfnrtu])', r'\\\\', resp.text)
-        data = json.loads(cleaned)
+        data = resp.json()
         posts = []
         for item in data.get("postList", []):
             post_id = str(item.get("logNo", ""))
-            title   = item.get("title", "(제목 없음)").strip()
+            title   = unquote_plus(item.get("title", "(제목 없음)")).strip()
             link    = f"https://blog.naver.com/{blog_id}/{post_id}"
             if post_id:
                 posts.append({"post_id": post_id, "title": title, "link": link})
@@ -335,4 +333,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
