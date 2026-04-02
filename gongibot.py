@@ -5,8 +5,14 @@ import requests
 import time
 from urllib.parse import unquote_plus
 
+# ── 설정 로드 ──────────────────────────────
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
-TELEGRAM_CHAT  = os.environ["TELEGRAM_CHAT"]
+# 쉼표로 구분된 여러 ID를 리스트로 변환 (예: "12345,-10067890")
+RAW_CHATS = os.environ.get("TELEGRAM_CHAT", "")
+TARGET_CHATS = [c.strip() for c in RAW_CHATS.split(",") if c.strip()]
+
+# 명령어 제어 권한을 가진 마스터 ID (첫 번째 ID를 관리자로 간주)
+ADMIN_CHAT = TARGET_CHATS[0] if TARGET_CHATS else ""
 
 # ── 네이버 카페 설정 ──────────────────────
 CAFE_ID = 21160703
@@ -46,7 +52,7 @@ def load_config() -> dict:
                     return {k: True for k in ALL_SOURCE_KEYS}
                 return json.loads(content)
         except Exception as e:
-            print(f"[경고] 설정 파일 읽기 실패, 기본값 사용: {e}")
+            print(f"[경고] 설정 파일 읽기 실패: {e}")
     return {k: True for k in ALL_SOURCE_KEYS}
 
 def save_config(config: dict):
@@ -61,19 +67,15 @@ def load_seen() -> dict:
                 if not content:
                     return {k: [] for k in ALL_SOURCE_KEYS}
                 data = json.loads(content)
-                # 구버전 리스트 형태 호환
                 if isinstance(data, list):
-                    print("[안내] 기존 seen_posts.json을 새 형식으로 변환합니다.")
                     new_data = {k: [] for k in ALL_SOURCE_KEYS}
                     new_data["종합"] = data
-                    save_seen(new_data)
                     return new_data
-                # 새 소스 키 누락 시 보완
                 for k in ALL_SOURCE_KEYS:
                     data.setdefault(k, [])
                 return data
         except Exception as e:
-            print(f"[경고] seen_posts 파일 읽기 실패, 기본값 사용: {e}")
+            print(f"[경고] seen_posts 읽기 실패: {e}")
     return {k: [] for k in ALL_SOURCE_KEYS}
 
 def save_seen(seen: dict):
@@ -81,22 +83,24 @@ def save_seen(seen: dict):
         json.dump(seen, f, ensure_ascii=False, indent=2)
 
 
-# ── 텔레그램 ──────────────────────────────
+# ── 텔레그램 (다중 전송) ──────────────────────
 
 def send_telegram(text: str):
-    try:
-        requests.post(
-            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-            json={
-                "chat_id":                  TELEGRAM_CHAT,
-                "text":                     text,
-                "parse_mode":               "HTML",
-                "disable_web_page_preview": True,
-            },
-            timeout=15,
-        ).raise_for_status()
-    except Exception as e:
-        print(f"[오류] 텔레그램 전송 실패: {e}")
+    """설정된 모든 TARGET_CHATS로 메시지를 전송합니다."""
+    for chat_id in TARGET_CHATS:
+        try:
+            requests.post(
+                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                json={
+                    "chat_id":                  chat_id,
+                    "text":                      text,
+                    "parse_mode":                "HTML",
+                    "disable_web_page_preview": True,
+                },
+                timeout=15,
+            ).raise_for_status()
+        except Exception as e:
+            print(f"[오류] 텔레그램 전송 실패 (대상: {chat_id}): {e}")
 
 
 # ── 네이버 카페 크롤링 ────────────────────
@@ -127,28 +131,21 @@ def fetch_cafe_articles(menu_id: int) -> list:
 # ── 네이버 블로그 크롤링 ──────────────────
 
 def fetch_blog_posts(blog_id: str, category_no: int) -> list:
-    """
-    네이버 블로그 카테고리별 글 목록 조회
-    반환: [{"post_id": str, "title": str, "link": str}, ...]
-    """
     url = "https://blog.naver.com/PostTitleListAsync.naver"
     params = {
         "blogId":       blog_id,
         "categoryNo":   category_no,
         "currentPage":  1,
         "countPerPage": 20,
-        "viewdate":     "",
     }
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
         "Referer":    f"https://blog.naver.com/{blog_id}",
-        "Accept":     "application/json, text/javascript, */*",
         "X-Requested-With": "XMLHttpRequest",
     }
     try:
         resp = requests.get(url, params=params, headers=headers, timeout=15)
         resp.raise_for_status()
-        # 잘못된 백슬래시 이스케이프 제거 후 파싱
         cleaned = re.sub(r'\\([^"\\/bfnrtu0-9])', r'\1', resp.text)
         data = json.loads(cleaned)
         posts = []
@@ -160,7 +157,7 @@ def fetch_blog_posts(blog_id: str, category_no: int) -> list:
                 posts.append({"post_id": post_id, "title": title, "link": link})
         return posts
     except Exception as e:
-        print(f"[오류] 블로그 {blog_id} 카테고리 {category_no} 조회 실패: {e}")
+        print(f"[오류] 블로그 {blog_id} 조회 실패: {e}")
         return []
 
 
@@ -172,95 +169,53 @@ def monitor_boards():
     is_first_run = all(len(v) == 0 for v in seen.values())
     total_new = 0
 
-    # ── 카페 게시판 ──
+    # 카페 확인
     for board_name, board_info in BOARDS.items():
-        if not config.get(board_name, True):
-            continue
-
-        menu_id = board_info["menu_id"]
-        print(f"\n[카페 {board_name}] 확인 중...")
-
-        articles = fetch_cafe_articles(menu_id)
-        if not articles:
-            print("  ⚠️ 게시글을 가져오지 못했습니다.")
-            continue
-
+        if not config.get(board_name, True): continue
+        articles = fetch_cafe_articles(board_info["menu_id"])
         if is_first_run:
             seen[board_name] = [str(a["articleId"]) for a in articles]
-            print(f"  ✓ {len(articles)}개 기존 글 등록")
             continue
-
-        seen_ids     = set(seen.get(board_name, []))
+        seen_ids = set(seen.get(board_name, []))
         new_articles = [a for a in articles if str(a["articleId"]) not in seen_ids]
         new_articles.reverse()
-
         for a in new_articles:
-            aid   = str(a["articleId"])
-            title = a.get("subject", "(제목 없음)")
-            url   = f"https://cafe.naver.com/ca-fe/cafes/{CAFE_ID}/articles/{aid}"
-            text  = f"{board_info['header']}\n★ {title}\n<a href=\"{url}\">바로가기</a>"
+            aid = str(a["articleId"])
+            url = f"https://cafe.naver.com/ca-fe/cafes/{CAFE_ID}/articles/{aid}"
+            text = f"{board_info['header']}\n★ {a.get('subject', '(제목 없음)')}\n<a href=\"{url}\">바로가기</a>"
             send_telegram(text)
-            print(f"  📤 전송: {title}")
             seen[board_name].append(aid)
             total_new += 1
             time.sleep(0.5)
 
-        if not new_articles:
-            print("  ✓ 새 글 없음")
-
-    # ── 블로그 ──
+    # 블로그 확인
     for target in BLOG_TARGETS:
-        name        = target["name"]
-        blog_id     = target["blog_id"]
-        category_no = target["category_no"]
-        header      = target["header"]
-
-        if not config.get(name, True):
-            continue
-
-        print(f"\n[블로그 {name}] 확인 중...")
-
-        posts = fetch_blog_posts(blog_id, category_no)
-        if not posts:
-            print("  ⚠️ 게시글을 가져오지 못했습니다.")
-            continue
-
+        name = target["name"]
+        if not config.get(name, True): continue
+        posts = fetch_blog_posts(target["blog_id"], target["category_no"])
         if is_first_run:
             seen[name] = [p["post_id"] for p in posts]
-            print(f"  ✓ {len(posts)}개 기존 글 등록")
             continue
-
-        seen_ids  = set(seen.get(name, []))
+        seen_ids = set(seen.get(name, []))
         new_posts = [p for p in posts if p["post_id"] not in seen_ids]
         new_posts.reverse()
-
         for p in new_posts:
-            text = f"{header}\n★ {p['title']}\n<a href=\"{p['link']}\">바로가기</a>"
+            text = f"{target['header']}\n★ {p['title']}\n<a href=\"{p['link']}\">바로가기</a>"
             send_telegram(text)
-            print(f"  📤 전송: {p['title']}")
             seen[name].append(p["post_id"])
             total_new += 1
             time.sleep(0.5)
 
-        if not new_posts:
-            print("  ✓ 새 글 없음")
-
     save_seen(seen)
-    save_config(config)
-
-    if is_first_run:
-        print("\n✅ 첫 실행 완료. 이후부터 새 글 알림 시작.")
-    else:
-        print(f"\n✅ 모니터링 완료. 총 {total_new}개 새 글 알림.")
+    if is_first_run: print("✅ 초기 데이터 등록 완료.")
+    else: print(f"✅ 모니터링 완료 ({total_new}개 전송)")
 
 
-# ── 텔레그램 명령어 처리 ──────────────────
+# ── 명령어 처리 (관리자 제한) ──────────────────
 
 def handle_telegram_commands():
     last_update_id = 0
-    print("\n🤖 텔레그램 봇 시작 (명령어 대기 중)")
-    print("명령어: /help, /status, /on [이름], /off [이름]")
-    print("Ctrl+C로 종료\n")
+    print(f"🤖 봇 명령어 대기 중 (관리자 ID: {ADMIN_CHAT})")
 
     while True:
         try:
@@ -270,63 +225,41 @@ def handle_telegram_commands():
                 timeout=35,
             )
             data = resp.json()
-            if not data.get("ok"):
-                continue
+            if not data.get("ok"): continue
 
             for update in data.get("result", []):
                 last_update_id = update["update_id"]
                 message = update.get("message", {})
-                chat_id = message.get("chat", {}).get("id")
+                chat_id = str(message.get("chat", {}).get("id", ""))
                 text    = message.get("text", "")
 
-                if str(chat_id) != str(TELEGRAM_CHAT):
+                # 관리자 방에서 온 명령어만 처리 (채널 메시지 등 무시)
+                if chat_id != ADMIN_CHAT:
                     continue
 
                 config = load_config()
 
                 if text == "/help":
                     board_list = "\n".join(f"• {k}" for k in ALL_SOURCE_KEYS)
-                    send_telegram(
-                        f"📚 <b>공고 알리미 사용법</b>\n\n"
-                        f"<b>🔹 명령어</b>\n"
-                        f"/help - 도움말\n"
-                        f"/status - 활성화 상태\n"
-                        f"/on [이름] - 알림 켜기\n"
-                        f"/off [이름] - 알림 끄기\n\n"
-                        f"<b>🔹 소스 목록</b>\n{board_list}"
-                    )
+                    send_telegram(f"📚 <b>관리 메뉴</b>\n\n/status - 상태 확인\n/on 이름 - 켜기\n/off 이름 - 끄기\n\n<b>목록:</b>\n{board_list}")
 
                 elif text == "/status":
-                    lines = "\n".join(
-                        f"{'✅' if config.get(k, True) else '❌'} {k}"
-                        for k in ALL_SOURCE_KEYS
-                    )
+                    lines = "\n".join(f"{'✅' if config.get(k, True) else '❌'} {k}" for k in ALL_SOURCE_KEYS)
                     send_telegram(f"📊 <b>활성화 상태</b>\n\n{lines}")
 
                 elif text.startswith("/on ") or text.startswith("/off "):
                     parts = text.split(None, 1)
-                    if len(parts) != 2:
-                        send_telegram("❌ 사용법: /on 이름 또는 /off 이름")
-                        continue
-                    cmd, target = parts
-                    enable = (cmd == "/on")
-                    if target not in ALL_SOURCE_KEYS:
-                        send_telegram(f"❌ 알 수 없는 소스입니다.\n\n사용 가능: {', '.join(ALL_SOURCE_KEYS)}")
-                        continue
-                    config[target] = enable
-                    save_config(config)
-                    action = "활성화" if enable else "비활성화"
-                    send_telegram(f"{'✅' if enable else '❌'} <b>{target}</b> {action}됨")
+                    if len(parts) == 2:
+                        cmd, target = parts
+                        if target in ALL_SOURCE_KEYS:
+                            config[target] = (cmd == "/on")
+                            save_config(config)
+                            send_telegram(f"{'✅' if config[target] else '❌'} <b>{target}</b> 변경됨")
 
-        except KeyboardInterrupt:
-            print("\n👋 봇 종료")
-            break
         except Exception as e:
             print(f"[오류] {e}")
             time.sleep(5)
 
-
-# ── 진입점 ────────────────────────────────
 
 def main():
     import sys
@@ -337,5 +270,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
