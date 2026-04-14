@@ -11,18 +11,15 @@ TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 RAW_CHATS = os.environ.get("TELEGRAM_CHAT", "")
 TARGET_CHATS = [c.strip() for c in RAW_CHATS.split(",") if c.strip()]
 
-# 명령어 제어 권한을 가진 마스터 ID (첫 번째 ID를 관리자로 간주)
-ADMIN_CHAT = TARGET_CHATS[0] if TARGET_CHATS else ""
-
 # ── 네이버 카페 설정 ──────────────────────
 CAFE_ID = 21160703
 
 BOARDS = {
-    "종합":      {"menu_id": 2510, "enabled": True, "header": "🔴 종합"},
-    "중앙공기업": {"menu_id": 861,  "enabled": True, "header": "🏢 중앙"},
-    "지방공기업": {"menu_id": 2486, "enabled": True, "header": "🏛 지방"},
-    "인턴계약직": {"menu_id": 2488, "enabled": True, "header": "📄 인턴"},
-    "학교병원":  {"menu_id": 2487, "enabled": True, "header": "🏥 학병"},
+    "종합":      {"menu_id": 2510, "header": "🔴 종합"},
+    "중앙공기업": {"menu_id": 861,  "header": "🏢 중앙"},
+    "지방공기업": {"menu_id": 2486, "header": "🏛 지방"},
+    "인턴계약직": {"menu_id": 2488, "header": "📄 인턴"},
+    "학교병원":  {"menu_id": 2487, "header": "🏥 학병"},
 }
 
 # ── 네이버 블로그 설정 ────────────────────
@@ -36,28 +33,10 @@ BLOG_TARGETS = [
 ]
 
 SEEN_FILE   = "seen_posts.json"
-CONFIG_FILE = "boards_config.json"
-
 ALL_SOURCE_KEYS = list(BOARDS.keys()) + [b["name"] for b in BLOG_TARGETS]
 
 
-# ── seen / config 관리 ────────────────────
-
-def load_config() -> dict:
-    if os.path.exists(CONFIG_FILE):
-        try:
-            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                content = f.read().strip()
-                if not content:
-                    return {k: True for k in ALL_SOURCE_KEYS}
-                return json.loads(content)
-        except Exception as e:
-            print(f"[경고] 설정 파일 읽기 실패: {e}")
-    return {k: True for k in ALL_SOURCE_KEYS}
-
-def save_config(config: dict):
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump(config, f, ensure_ascii=False, indent=2)
+# ── seen 관리 ────────────────────
 
 def load_seen() -> dict:
     if os.path.exists(SEEN_FILE):
@@ -93,7 +72,7 @@ def send_telegram(text: str):
                 f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
                 json={
                     "chat_id":                  chat_id,
-                    "text":                      text,
+                    "text":                     text,
                     "parse_mode":                "HTML",
                     "disable_web_page_preview": True,
                 },
@@ -164,14 +143,12 @@ def fetch_blog_posts(blog_id: str, category_no: int) -> list:
 # ── 모니터링 ──────────────────────────────
 
 def monitor_boards():
-    config = load_config()
     seen   = load_seen()
     is_first_run = all(len(v) == 0 for v in seen.values())
     total_new = 0
 
     # 카페 확인
     for board_name, board_info in BOARDS.items():
-        if not config.get(board_name, True): continue
         articles = fetch_cafe_articles(board_info["menu_id"])
         if is_first_run:
             seen[board_name] = [str(a["articleId"]) for a in articles]
@@ -191,7 +168,6 @@ def monitor_boards():
     # 블로그 확인
     for target in BLOG_TARGETS:
         name = target["name"]
-        if not config.get(name, True): continue
         posts = fetch_blog_posts(target["blog_id"], target["category_no"])
         if is_first_run:
             seen[name] = [p["post_id"] for p in posts]
@@ -207,66 +183,14 @@ def monitor_boards():
             time.sleep(0.5)
 
     save_seen(seen)
-    if is_first_run: print("✅ 초기 데이터 등록 완료.")
-    else: print(f"✅ 모니터링 완료 ({total_new}개 전송)")
-
-
-# ── 명령어 처리 (관리자 제한) ──────────────────
-
-def handle_telegram_commands():
-    last_update_id = 0
-    print(f"🤖 봇 명령어 대기 중 (관리자 ID: {ADMIN_CHAT})")
-
-    while True:
-        try:
-            resp = requests.get(
-                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates",
-                params={"offset": last_update_id + 1, "timeout": 30},
-                timeout=35,
-            )
-            data = resp.json()
-            if not data.get("ok"): continue
-
-            for update in data.get("result", []):
-                last_update_id = update["update_id"]
-                message = update.get("message", {})
-                chat_id = str(message.get("chat", {}).get("id", ""))
-                text    = message.get("text", "")
-
-                # 관리자 방에서 온 명령어만 처리 (채널 메시지 등 무시)
-                if chat_id != ADMIN_CHAT:
-                    continue
-
-                config = load_config()
-
-                if text == "/help":
-                    board_list = "\n".join(f"• {k}" for k in ALL_SOURCE_KEYS)
-                    send_telegram(f"📚 <b>관리 메뉴</b>\n\n/status - 상태 확인\n/on 이름 - 켜기\n/off 이름 - 끄기\n\n<b>목록:</b>\n{board_list}")
-
-                elif text == "/status":
-                    lines = "\n".join(f"{'✅' if config.get(k, True) else '❌'} {k}" for k in ALL_SOURCE_KEYS)
-                    send_telegram(f"📊 <b>활성화 상태</b>\n\n{lines}")
-
-                elif text.startswith("/on ") or text.startswith("/off "):
-                    parts = text.split(None, 1)
-                    if len(parts) == 2:
-                        cmd, target = parts
-                        if target in ALL_SOURCE_KEYS:
-                            config[target] = (cmd == "/on")
-                            save_config(config)
-                            send_telegram(f"{'✅' if config[target] else '❌'} <b>{target}</b> 변경됨")
-
-        except Exception as e:
-            print(f"[오류] {e}")
-            time.sleep(5)
+    if is_first_run: 
+        print("✅ 초기 데이터 등록 완료.")
+    else: 
+        print(f"✅ 모니터링 완료 ({total_new}개 전송)")
 
 
 def main():
-    import sys
-    if len(sys.argv) > 1 and sys.argv[1] == "bot":
-        handle_telegram_commands()
-    else:
-        monitor_boards()
+    monitor_boards()
 
 if __name__ == "__main__":
     main()
