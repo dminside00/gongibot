@@ -163,7 +163,7 @@ def monitor_boards():
             send_telegram(text)
             seen[board_name].append(aid)
             total_new += 1
-            time.sleep(0.5)
+            time.sleep(3)  # 1분에 약 17개 전송 (안전권 확보)
 
     # 블로그 확인
     for target in BLOG_TARGETS:
@@ -180,7 +180,7 @@ def monitor_boards():
             send_telegram(text)
             seen[name].append(p["post_id"])
             total_new += 1
-            time.sleep(0.5)
+            time.sleep(3)  # 1분에 약 17개 전송 (안전권 확보)
 
     save_seen(seen)
     if is_first_run: 
