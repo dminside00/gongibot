@@ -7,7 +7,6 @@ from urllib.parse import unquote_plus
 
 # ── 설정 로드 ──────────────────────────────
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
-# 쉼표로 구분된 여러 ID를 리스트로 변환 (예: "12345,-10067890")
 RAW_CHATS = os.environ.get("TELEGRAM_CHAT", "")
 TARGET_CHATS = [c.strip() for c in RAW_CHATS.split(",") if c.strip()]
 
@@ -32,7 +31,39 @@ BLOG_TARGETS = [
     },
 ]
 
-SEEN_FILE   = "seen_posts.json"
+# ── 키워드 필터 ───────────────────────────
+ALLOW_KEYWORDS = [
+    "정규직", "인턴", "행정", "사무", "경영", "기획", "청년", "채용형", "체험형",
+    "신입", "공개채용", "공채", "일반", "일경험", "통합", "공공기관",
+]
+EXCLUDE_KEYWORDS = [
+    "환경관리", "치과위생사", "의사직", "간호직", "응급구조사", "의료직", "간호사",
+    "의사", "약사", "방사선사", "정비보조", "촉탁의", "임상병리사", "치과기공사",
+    "물리치료사", "임상교수", "교수", "약무직", "영양사", "연구원", "조리사",
+    "공공급식", "생산관리", "조리원", "시간강사", "수영강습", "강사", "장애",
+    "경력", "위촉", "단기노무원", "보훈", "별정직",
+]
+
+def should_send(title: str) -> bool:
+    """
+    True  → 발송
+    False → 차단
+    규칙:
+      1. ALLOW 포함 → 발송 (EXCLUDE 무관)
+      2. ALLOW 없고 EXCLUDE 포함 → 차단
+      3. 둘 다 없음 → 발송
+    """
+    has_allow   = any(kw in title for kw in ALLOW_KEYWORDS)
+    has_exclude = any(kw in title for kw in EXCLUDE_KEYWORDS)
+
+    if has_allow:
+        return True
+    if has_exclude:
+        return False
+    return True
+
+
+SEEN_FILE       = "seen_posts.json"
 ALL_SOURCE_KEYS = list(BOARDS.keys()) + [b["name"] for b in BLOG_TARGETS]
 
 
@@ -65,7 +96,6 @@ def save_seen(seen: dict):
 # ── 텔레그램 (다중 전송) ──────────────────────
 
 def send_telegram(text: str):
-    """설정된 모든 TARGET_CHATS로 메시지를 전송합니다."""
     for chat_id in TARGET_CHATS:
         try:
             requests.post(
@@ -73,7 +103,7 @@ def send_telegram(text: str):
                 json={
                     "chat_id":                  chat_id,
                     "text":                     text,
-                    "parse_mode":                "HTML",
+                    "parse_mode":               "HTML",
                     "disable_web_page_preview": True,
                 },
                 timeout=15,
@@ -143,9 +173,10 @@ def fetch_blog_posts(blog_id: str, category_no: int) -> list:
 # ── 모니터링 ──────────────────────────────
 
 def monitor_boards():
-    seen   = load_seen()
+    seen         = load_seen()
     is_first_run = all(len(v) == 0 for v in seen.values())
-    total_new = 0
+    total_new    = 0
+    total_skip   = 0
 
     # 카페 확인
     for board_name, board_info in BOARDS.items():
@@ -153,40 +184,60 @@ def monitor_boards():
         if is_first_run:
             seen[board_name] = [str(a["articleId"]) for a in articles]
             continue
-        seen_ids = set(seen.get(board_name, []))
+
+        seen_ids     = set(seen.get(board_name, []))
         new_articles = [a for a in articles if str(a["articleId"]) not in seen_ids]
         new_articles.reverse()
+
         for a in new_articles:
-            aid = str(a["articleId"])
-            url = f"https://cafe.naver.com/ca-fe/cafes/{CAFE_ID}/articles/{aid}"
-            text = f"{board_info['header']}\n★ {a.get('subject', '(제목 없음)')}\n<a href=\"{url}\">바로가기</a>"
-            send_telegram(text)
+            aid   = str(a["articleId"])
+            title = a.get("subject", "(제목 없음)")
+
+            # seen에 먼저 등록 (필터 결과와 무관하게 재처리 방지)
             seen[board_name].append(aid)
+
+            if not should_send(title):
+                print(f"[필터] 차단: [{board_name}] {title}")
+                total_skip += 1
+                continue
+
+            url  = f"https://cafe.naver.com/ca-fe/cafes/{CAFE_ID}/articles/{aid}"
+            text = f"{board_info['header']}\n★ {title}\n<a href=\"{url}\">바로가기</a>"
+            send_telegram(text)
             total_new += 1
-            time.sleep(3)  # 1분에 약 17개 전송 (안전권 확보)
+            time.sleep(3)
 
     # 블로그 확인
     for target in BLOG_TARGETS:
-        name = target["name"]
+        name  = target["name"]
         posts = fetch_blog_posts(target["blog_id"], target["category_no"])
+
         if is_first_run:
             seen[name] = [p["post_id"] for p in posts]
             continue
-        seen_ids = set(seen.get(name, []))
+
+        seen_ids  = set(seen.get(name, []))
         new_posts = [p for p in posts if p["post_id"] not in seen_ids]
         new_posts.reverse()
+
         for p in new_posts:
+            seen[name].append(p["post_id"])
+
+            if not should_send(p["title"]):
+                print(f"[필터] 차단: [{name}] {p['title']}")
+                total_skip += 1
+                continue
+
             text = f"{target['header']}\n★ {p['title']}\n<a href=\"{p['link']}\">바로가기</a>"
             send_telegram(text)
-            seen[name].append(p["post_id"])
             total_new += 1
-            time.sleep(3)  # 1분에 약 17개 전송 (안전권 확보)
+            time.sleep(3)
 
     save_seen(seen)
-    if is_first_run: 
+    if is_first_run:
         print("✅ 초기 데이터 등록 완료.")
-    else: 
-        print(f"✅ 모니터링 완료 ({total_new}개 전송)")
+    else:
+        print(f"✅ 모니터링 완료 — 전송 {total_new}개 / 차단 {total_skip}개")
 
 
 def main():
