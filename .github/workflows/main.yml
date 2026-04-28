@@ -1,7 +1,7 @@
 name: Naver Cafe Bot
 on:
   schedule:
-    - cron: "0 3 * * *"  # 한국 오후 12시 (UTC 3시)
+    - cron: "30 3 * * *"  # UTC 03:30 → KST 13시 전후 실행
   workflow_dispatch:
 permissions:
   contents: write
